@@ -154,7 +154,7 @@ public class StatefulVMTests {
         else if( name.getMethodName().equals("stop") ) {
             testVmId = tm.getTestVMId(DaseinTestManager.STATEFUL, VmState.RUNNING, true, testDataCenterId);
         }
-        else if( name.getMethodName().equals("modifyInstance") ) {
+        else if( name.getMethodName().startsWith("modifyInstance") ) {
             VmState vmStateForAlter = null;
             for( VmState state : VmState.values() ) {
                 try {
@@ -1061,10 +1061,11 @@ public class StatefulVMTests {
         }
 
         VirtualMachineProduct currentProduct = support.getProduct(vm.getProductId());
+        assertNotNull("Was unable to get a current product from the vm", currentProduct);
+
         tm.out("Before", vm.getProductId());
         VirtualMachineProduct newProduct = null;
-        Iterable<VirtualMachineProduct> products = support.listProducts(vm.getArchitecture());
-        for( VirtualMachineProduct product : support.listProducts(vm.getArchitecture()) ) {
+        for( VirtualMachineProduct product : support.listProducts(vm.getProviderMachineImageId()) ) {
             if( product.getProviderProductId().equals(currentProduct.getProviderProductId()) ) {
                 continue;
             }
@@ -1106,6 +1107,74 @@ public class StatefulVMTests {
 //            Thread.sleep(5000L);
 //        } catch (InterruptedException ignore) {
 //        }
+        if( vm != null ) {
+            tm.out("After", vm.getProductId());
+            // TODO(stas): I'm not sure this will work in case of the arbitrary memory/cpu changes
+            assertEquals("Current product id does not match the target product id", newProduct.getProviderProductId(), vm.getProductId());
+        }
+    }
+
+    @Test
+    public void modifyInstanceWithSmallerProduct() throws CloudException, InternalException {
+        assumeTrue(!tm.isTestSkipped());
+        ComputeServices services = tm.getProvider().getComputeServices();
+
+        if( services == null ) {
+            tm.ok("No compute services in this cloud");
+            return;
+        }
+
+        VirtualMachineSupport support = services.getVirtualMachineSupport();
+        if( support == null ) {
+            tm.ok("No virtual machine support in this cloud");
+            return;
+        }
+
+        if( testVmId == null ) {
+            tm.warn("No test virtual machine was found for this test");
+            return;
+        }
+
+        VirtualMachine vm = support.getVirtualMachine(testVmId);
+        if( vm == null ) {
+            tm.warn("Test virtual machine " + testVmId + " no longer exists");
+        }
+
+        if( !support.getCapabilities().canAlter(vm.getCurrentState()) ) {
+            tm.ok("Alter vm not supported for vm state " + vm.getCurrentState());
+            return;
+        }
+
+        VirtualMachineProduct currentProduct = support.getProduct(vm.getProductId());
+        assertNotNull("Was unable to get a current product from the vm", currentProduct);
+
+        tm.out("Before", vm.getProductId());
+        VirtualMachineProduct newProduct = null;
+        for( VirtualMachineProduct product : support.listProducts(vm.getProviderMachineImageId()) ) {
+            if( product.getProviderProductId().equals(currentProduct.getProviderProductId()) ) {
+                continue;
+            }
+            if( (product.getCpuCount() < currentProduct.getCpuCount()
+                    || product.getRamSize().intValue() < currentProduct.getRamSize().intValue())
+                    && product.getRootVolumeSize().longValue() < currentProduct.getRootVolumeSize().longValue() ) {
+                newProduct = product;
+                break;
+            }
+        }
+        assertNotNull("Was unable to select a new product as alterVm target", newProduct);
+
+        if (support.getCapabilities().getVerticalScalingCapabilities().isSupportsProductSizeChanges()) {
+            // TODO(stas): Having to pass strings here is not nice, we'll need to fix it in the next release
+            vm = support.alterVirtualMachineSize(testVmId, String.valueOf(newProduct.getCpuCount()), String.valueOf(newProduct.getRamSize().intValue()));
+        }
+        else if (support.getCapabilities().getVerticalScalingCapabilities().isSupportsProductChanges()) {
+            vm = support.alterVirtualMachineProduct(testVmId, newProduct.getProviderProductId());
+        }
+        else {
+            tm.warn("Unable to determine how vm product scaling is handled in "+tm.getProvider().getCloudName());
+            tm.warn("Test not attempted");
+            return;
+        }
         if( vm != null ) {
             tm.out("After", vm.getProductId());
             // TODO(stas): I'm not sure this will work in case of the arbitrary memory/cpu changes
